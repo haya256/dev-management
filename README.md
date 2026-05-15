@@ -62,7 +62,7 @@ cd ..
 
 ```bash
 # dev-management をクローン後
-git clone git@github.com:haya256/dev-management-data.git data
+git clone git@github.com:{your-username}/dev-management-data.git data
 
 python3 scan.py   # 自分の PC のデータを追加・index.md を再生成
 

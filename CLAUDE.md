@@ -18,7 +18,7 @@ ls data/
 プライベートリポジトリを `data/` としてクローンする:
 
 ```bash
-git clone https://github.com/haya256/dev-management-data.git data
+git clone https://github.com/{your-username}/dev-management-data.git data
 ```
 
 クローン後、スキャンを実行:
