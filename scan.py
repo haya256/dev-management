@@ -5,6 +5,7 @@ import re
 import shutil
 import socket
 import subprocess
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -48,6 +49,7 @@ def find_projects(dev_root: Path, self_path: Path) -> list[Path]:
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         if "README.md" in files:
             results.append(current)
+            dirs.clear()  # プロジェクトルートが見つかったらサブは掘らない
     return results
 
 
@@ -116,8 +118,14 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
     shutil.copy2(project_path / "README.md", out_dir / "README.md")
     (out_dir / "tree.txt").write_text(generate_tree(project_path), encoding="utf-8")
 
+    pmo_readme = project_path / "pmo" / "README.md"
+    has_pmo = pmo_readme.exists()
+    if has_pmo:
+        pmo_out = out_dir / "pmo"
+        pmo_out.mkdir(exist_ok=True)
+        shutil.copy2(pmo_readme, pmo_out / "README.md")
+
     rel = "~/" + str(project_path.relative_to(Path.home()))
-    has_pmo = (project_path / "pmo").is_dir()
     description = extract_description(project_path / "README.md")
     return {"key": key, "path": rel, "has_pmo": has_pmo, "description": description}
 
@@ -176,44 +184,63 @@ def discover_pc_data(data_root: Path) -> list[dict]:
     return results
 
 
-def write_merged_index(data_root: Path):
+def write_merged_index(data_root: Path) -> int:
     pc_data = discover_pc_data(data_root)
     if not pc_data:
-        return
+        return 0
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pc_names = sorted(pc["hostname"] for pc in pc_data)
     pc_header = "  ".join(
         f"{pc['hostname']} ({pc['scanned_at'][:16].replace('T', ' ')})"
         for pc in pc_data
     )
 
-    all_rows = []
+    # path をキーにして PC ごとのエントリを集約
+    by_path: dict[str, dict[str, dict]] = defaultdict(dict)
     for pc in pc_data:
         for e in pc["entries"]:
-            all_rows.append({
-                "pc": pc["hostname"],
-                "key": e["key"],
-                "path": e["path"],
-                "has_pmo": e.get("has_pmo", False),
-                "description": e.get("description", ""),
-            })
-    all_rows.sort(key=lambda r: (r["key"], r["pc"]))
+            by_path[e["path"]][pc["hostname"]] = e
 
-    rows = "\n".join(
-        f"| {r['pc']} | {r['key']} | {r['path']} | {'YES' if r['has_pmo'] else ''} | {r['description']} |"
-        for r in all_rows
-    )
-    total = len(all_rows)
+    unique = len(by_path)
+    cross_pc = sum(1 for pcs in by_path.values() if len(pcs) > 1)
+    total_raw = sum(len(pcs) for pcs in by_path.values())
+
+    # サマリ
+    pc_col_header = " | ".join(pc_names)
+    pc_col_sep = " | ".join(":-:" for _ in pc_names)
+    rows = []
+    for path in sorted(by_path.keys()):
+        pcs = by_path[path]
+        best = next((e for e in pcs.values() if e.get("has_pmo")), next(iter(pcs.values())))
+        cols = []
+        for pc in pc_names:
+            if pc not in pcs:
+                cols.append("-")
+            elif pcs[pc].get("has_pmo"):
+                cols.append("Main")
+            else:
+                cols.append("clone")
+        rows.append(f"| {path} | {' | '.join(cols)} | {best['description']} |")
+
+    rows_str = "\n".join(rows)
     content = (
         f"# Dev Projects Index (All PCs)\n\n"
         f"Last merged: {now}\n"
         f"PCs: {pc_header}\n\n"
-        f"| PC | Project Key | Path | Main | Description |\n"
-        f"|----|-------------|------|:----:|-------------|\n"
-        f"{rows}\n"
+        f"## サマリ\n\n"
+        f"| 区分 | 件数 |\n"
+        f"|------|-----:|\n"
+        f"| ユニークプロジェクト数 | **{unique}** |\n"
+        f"| うち複数PCに存在（重複） | {cross_pc} |\n"
+        f"| 総エントリ数（生） | {total_raw} |\n\n"
+        f"## プロジェクト一覧\n\n"
+        f"| Path | {pc_col_header} | Description |\n"
+        f"|------|{pc_col_sep}|-------------|\n"
+        f"{rows_str}\n"
     )
     (data_root / "index.md").write_text(content, encoding="utf-8")
-    return total
+    return unique
 
 
 # ── エントリポイント ──────────────────────────────────────────────────────────
@@ -237,8 +264,8 @@ def main():
         print("  cd data && git remote add origin <url> && cd ..")
 
     if args.merge_only:
-        total = write_merged_index(data_root)
-        print(f"index.md を再生成しました ({total} エントリ)")
+        unique = write_merged_index(data_root)
+        print(f"index.md を再生成しました ({unique} ユニークプロジェクト)")
         return
 
     if not dev_root.is_dir():
@@ -271,9 +298,9 @@ def main():
     write_pc_meta(entries, pc_root, hostname, hostname_raw, dev_root)
     write_pc_entries(entries, pc_root)
     write_pc_index(entries, pc_root, hostname)
-    total = write_merged_index(data_root)
+    unique = write_merged_index(data_root)
 
-    print(f"Scanned {len(entries)} projects [{hostname}] → data/")
+    print(f"Scanned {len(entries)} projects [{hostname}] → data/ (merged: {unique} unique)")
 
 
 if __name__ == "__main__":
