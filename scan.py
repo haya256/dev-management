@@ -5,6 +5,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,17 @@ PROJECTS_SUBDIR = "projects"
 
 def sanitize_hostname(raw: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
+
+
+def get_stable_hostname() -> str:
+    # macOS の socket.gethostname() はネットワーク（DHCP/mDNS）依存で変わるため、
+    # ユーザー設定で固定される LocalHostName を優先する
+    if sys.platform == "darwin":
+        result = subprocess.run(["scutil", "--get", "LocalHostName"],
+                                capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return socket.gethostname()
 
 
 def ensure_data_git_repo(data_root: Path) -> bool:
@@ -251,7 +263,7 @@ def main():
                         help="スキャンをスキップして index.md だけ再生成する")
     args = parser.parse_args()
 
-    hostname_raw = socket.gethostname()
+    hostname_raw = get_stable_hostname()
     hostname = sanitize_hostname(hostname_raw)
     dev_root = (Path.home() / "dev").resolve()
     self_path = Path(__file__).resolve().parent
