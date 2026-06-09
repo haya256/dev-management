@@ -94,6 +94,19 @@ def generate_tree(root: Path, max_depth: int = TREE_MAX_DEPTH) -> str:
     return "\n".join(lines)
 
 
+def get_last_activity(project_path: Path) -> str:
+    """最終更新日 (YYYY-MM-DD)。git の最終コミット日、なければ README.md の mtime。"""
+    result = subprocess.run(["git", "log", "-1", "--format=%cs"],
+                            cwd=project_path, capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    try:
+        ts = (project_path / "README.md").stat().st_mtime
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+    except OSError:
+        return ""
+
+
 def extract_description(readme_path: Path) -> str:
     try:
         text = readme_path.read_text(encoding="utf-8", errors="replace")
@@ -139,7 +152,9 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
 
     rel = "~/" + str(project_path.relative_to(Path.home()))
     description = extract_description(project_path / "README.md")
-    return {"key": key, "path": rel, "has_pmo": has_pmo, "description": description}
+    return {"key": key, "path": rel, "has_pmo": has_pmo,
+            "last_activity": get_last_activity(project_path),
+            "description": description}
 
 
 def write_pc_meta(entries: list[dict], pc_root: Path, hostname: str, hostname_raw: str, dev_root: Path):
@@ -164,14 +179,15 @@ def write_pc_entries(entries: list[dict], pc_root: Path):
 def write_pc_index(entries: list[dict], pc_root: Path, hostname: str):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = "\n".join(
-        f"| {e['key']} | {e['path']} | {'YES' if e['has_pmo'] else ''} | {e['description']} |"
+        f"| {e['key']} | {e['path']} | {'YES' if e['has_pmo'] else ''} |"
+        f" {e.get('last_activity') or '-'} | {e['description']} |"
         for e in sorted(entries, key=lambda e: e["key"])
     )
     content = (
         f"# Dev Projects Index — {hostname}\n\n"
         f"Scanned: {now}  |  Projects: {len(entries)}\n\n"
-        f"| Project Key | Path | Main | Description |\n"
-        f"|-------------|------|:----:|-------------|\n"
+        f"| Project Key | Path | Main | Updated | Description |\n"
+        f"|-------------|------|:----:|:-------:|-------------|\n"
         f"{rows}\n"
     )
     (pc_root / "index.md").write_text(content, encoding="utf-8")
@@ -222,9 +238,11 @@ def write_merged_index(data_root: Path) -> int:
     pc_col_header = " | ".join(pc_names)
     pc_col_sep = " | ".join(":-:" for _ in pc_names)
     rows = []
+    recent = []
     for path in sorted(by_path.keys()):
         pcs = by_path[path]
         best = next((e for e in pcs.values() if e.get("has_pmo")), next(iter(pcs.values())))
+        updated = max((e.get("last_activity") or "" for e in pcs.values()), default="")
         cols = []
         for pc in pc_names:
             if pc not in pcs:
@@ -233,8 +251,15 @@ def write_merged_index(data_root: Path) -> int:
                 cols.append("Main")
             else:
                 cols.append("clone")
-        rows.append(f"| {path} | {' | '.join(cols)} | {best['description']} |")
+        rows.append(f"| {path} | {' | '.join(cols)} | {updated or '-'} | {best['description']} |")
+        if updated:
+            recent.append((updated, path, best["description"]))
 
+    recent.sort(reverse=True)
+    recent_rows = "\n".join(
+        f"| {updated} | {path} | {desc} |"
+        for updated, path, desc in recent[:15]
+    )
     rows_str = "\n".join(rows)
     content = (
         f"# Dev Projects Index (All PCs)\n\n"
@@ -246,9 +271,13 @@ def write_merged_index(data_root: Path) -> int:
         f"| ユニークプロジェクト数 | **{unique}** |\n"
         f"| うち複数PCに存在（重複） | {cross_pc} |\n"
         f"| 総エントリ数（生） | {total_raw} |\n\n"
+        f"## 最近の動き（直近15件）\n\n"
+        f"| Updated | Path | Description |\n"
+        f"|:-------:|------|-------------|\n"
+        f"{recent_rows}\n\n"
         f"## プロジェクト一覧\n\n"
-        f"| Path | {pc_col_header} | Description |\n"
-        f"|------|{pc_col_sep}|-------------|\n"
+        f"| Path | {pc_col_header} | Updated | Description |\n"
+        f"|------|{pc_col_sep}|:-------:|-------------|\n"
         f"{rows_str}\n"
     )
     (data_root / "index.md").write_text(content, encoding="utf-8")
