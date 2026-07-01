@@ -13,6 +13,7 @@ from pathlib import Path
 SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
     "dist", "build", "target", ".idea", ".vscode",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache",
 }
 TREE_MAX_DEPTH = 3
 README_SCAN_LINES = 30
@@ -58,7 +59,8 @@ def find_projects(dev_root: Path, self_path: Path) -> list[Path]:
         if current == self_path:
             dirs.clear()
             continue
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        # 隠しディレクトリ（.pytest_cache 等）は自動生成 README を拾わないよう探索対象外
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
         if "README.md" in files:
             results.append(current)
             dirs.clear()  # プロジェクトルートが見つかったらサブは掘らない
