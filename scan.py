@@ -64,6 +64,11 @@ def find_projects(dev_root: Path, self_path: Path) -> list[Path]:
         if "README.md" in files:
             results.append(current)
             dirs.clear()  # プロジェクトルートが見つかったらサブは掘らない
+        elif "pmo" in dirs and (current / "pmo" / "README.md").exists():
+            # ルートに README がなくても pmo/ があればプロジェクトルート。
+            # 配下（data/ のバックアップ等）に潜ると同梱物の README を誤登録するため掘らない
+            results.append((current / "pmo").resolve())
+            dirs.clear()
     return results
 
 
