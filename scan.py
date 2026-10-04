@@ -14,6 +14,8 @@ SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
     "dist", "build", "target", ".idea", ".vscode",
     ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    # 同梱されたサードパーティコードの README をプロジェクトとして拾わないよう除外
+    "vendor", "wp-admin", "wp-includes",
 }
 TREE_MAX_DEPTH = 3
 README_SCAN_LINES = 30
