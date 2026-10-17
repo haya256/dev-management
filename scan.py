@@ -69,7 +69,7 @@ def find_projects(dev_root: Path, self_path: Path) -> list[Path]:
         elif "pmo" in dirs and (current / "pmo" / "README.md").exists():
             # ルートに README がなくても pmo/ があればプロジェクトルート。
             # 配下（data/ のバックアップ等）に潜ると同梱物の README を誤登録するため掘らない
-            results.append((current / "pmo").resolve())
+            results.append(current)
             dirs.clear()
     return results
 
@@ -104,16 +104,22 @@ def generate_tree(root: Path, max_depth: int = TREE_MAX_DEPTH) -> str:
 
 
 def get_last_activity(project_path: Path) -> str:
-    """最終更新日 (YYYY-MM-DD)。git の最終コミット日、なければ README.md の mtime。"""
+    """最終更新日 (YYYY-MM-DD)。git の最終コミット日、なければ README.md（なければ pmo/README.md）の mtime。"""
     result = subprocess.run(["git", "log", "-1", "--format=%cs"],
                             cwd=project_path, capture_output=True, text=True)
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
     try:
-        ts = (project_path / "README.md").stat().st_mtime
+        ts = main_readme(project_path).stat().st_mtime
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
     except OSError:
         return ""
+
+
+def main_readme(project_path: Path) -> Path:
+    """説明の元になる README。ルートに無ければ pmo/README.md（pmo/ だけを持つプロジェクト）。"""
+    root_readme = project_path / "README.md"
+    return root_readme if root_readme.exists() else project_path / "pmo" / "README.md"
 
 
 def extract_description(readme_path: Path) -> str:
@@ -149,7 +155,8 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
     out_dir = pc_root / PROJECTS_SUBDIR / key
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    shutil.copy2(project_path / "README.md", out_dir / "README.md")
+    if (project_path / "README.md").exists():
+        shutil.copy2(project_path / "README.md", out_dir / "README.md")
     (out_dir / "tree.txt").write_text(generate_tree(project_path), encoding="utf-8")
 
     pmo_readme = project_path / "pmo" / "README.md"
@@ -160,7 +167,7 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
         shutil.copy2(pmo_readme, pmo_out / "README.md")
 
     rel = "~/" + str(project_path.relative_to(Path.home()))
-    description = extract_description(project_path / "README.md")
+    description = extract_description(main_readme(project_path))
     return {"key": key, "path": rel, "has_pmo": has_pmo,
             "last_activity": get_last_activity(project_path),
             "description": description}
