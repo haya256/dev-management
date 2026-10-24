@@ -72,7 +72,7 @@ cd ..
 
 プロジェクトを指すときは、必ずその**開発場所（`pmo/` があるPC＝Main のPC）を明記する**こと。
 
-- 例: 「air-conditioner-replace（開発場所: MHBook-Air の `~/dev/air-conditioner-replace/`）」
+- 例: 「example-project（開発場所: <PC名> の `~/dev/example-project/`）」
 - どのPCにも `pmo/` がない場合は、存在するPC名を挙げた上で「Main 未設定」と明記する
 - ユーザーは複数PCを使い分けているため、どのPCで Claude を立ち上げるべきかが常に分かる状態にする
 
