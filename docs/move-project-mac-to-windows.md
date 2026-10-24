@@ -2,8 +2,10 @@
 
 Mac で開発しているプロジェクトを Windows 環境（WSL）へ移動し、開発場所（Main）を Windows 環境に一本化するための手順です。
 
-- 転送方法: プロジェクトを tar で固めて Google ドライブ経由で受け渡す
+- 転送方法: プロジェクトを tar で固めて Taildrop（Tailscale）で受け渡す
   - git 管理外のもの（`pmo/`・`data/`・`config/`・`.claude/settings.local.json` など）も含めて丸ごと運ぶため
+  - Taildrop が使えない場合は Google ドライブ経由でも可
+- Claude Code のセッション履歴・メモリも一緒に運ぶ（`claude --resume` で Mac 時代の会話を再開できる）
 - 移動後: Mac 側のプロジェクトは丸ごと削除する
 
 以下では例として `example-project` を使います。別のプロジェクトでは `PROJ` の値だけ差し替えてください。
@@ -18,6 +20,7 @@ Mac と Windows 環境（WSL）の両方のターミナルで、最初に変数�
 PROJ=example-project
 ```
 
+- 新しいターミナルを開いたら、その都度設定し直すこと（未設定のまま `rm -rf ~/dev/$PROJ` を実行すると `~/dev/` 全体が消えます）
 - Mac 側の場所: `~/dev/$PROJ`
 - Windows 環境側の場所: WSL の `~/dev/$PROJ`
   - `/mnt/c/...`（Windows 側）には置かないこと。パーミッションが崩れ、動作も遅くなります
@@ -47,7 +50,9 @@ PROJ=example-project
 
 ---
 
-## 2. Mac: tar で固めて Google ドライブへ置く
+## 2. Mac: tar で固めて送る
+
+### プロジェクト本体
 
 ```bash
 COPYFILE_DISABLE=1 tar --no-xattrs \
@@ -63,29 +68,63 @@ COPYFILE_DISABLE=1 tar --no-xattrs \
 tar -tzf ~/Desktop/$PROJ.tar.gz | grep -E "^$PROJ/(pmo|\.git|\.claude)/$"
 ```
 
-### （任意）Claude Code のメモリも一緒に運ぶ
+### Claude Code のセッション履歴とメモリ
 
-Claude Code のプロジェクト別メモリは、PC ごとのパスに紐づいています。そのため移動先では自動で引き継がれません。引き継ぎたい場合は、別の tar にしておきます。
+Claude Code は、プロジェクトごとのデータを `~/.claude/projects/<フォルダ>/` に保存しています。フォルダ名はプロジェクトの絶対パスの `/` を `-` に置き換えたものです。
+
+- Mac: `/Users/<macユーザー>/dev/example-project` → `-Users-<macユーザー>-dev-example-project`
+- WSL: `/home/<WSLユーザー>/dev/example-project` → `-home-<WSLユーザー>-dev-example-project`
+
+パスが変わるとフォルダ名も変わるので、自動では引き継がれません。フォルダを丸ごと固めて運びます。中身は次のとおりです。
+
+- `<セッションID>.jsonl`: 会話履歴（`claude --resume` の一覧に出るもの）
+- `<セッションID>/`: サブエージェントの記録など
+- `memory/`: プロジェクトのメモリ
+- `sessions-index.json`
 
 ```bash
-ls ~/.claude/projects/ | grep -- "-dev-$PROJ$"    # 例: -Users-<macユーザー>-dev-example-project
-tar -czf ~/Desktop/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/<上で見つけたディレクトリ名> memory
+SRC=$(ls ~/.claude/projects/ | grep -- "-dev-$PROJ$")
+echo $SRC                           # 例: -Users-xxx-dev-example-project
+ls ~/.claude/projects/$SRC          # *.jsonl と memory/ があるはず
+
+COPYFILE_DISABLE=1 tar --no-xattrs -czf ~/Desktop/$PROJ-claude.tar.gz -C ~/.claude/projects/$SRC .
 ```
 
-### Google ドライブへアップロード
+- `memory/MEMORY.md` が空でも異常とは限りません。メモリの内容をプロジェクトのスキル（`.claude/skills/`）や `CLAUDE.md` に移していることがあり、その場合はプロジェクト本体の tar で運べています
 
-次のどちらかの方法で、作った tar（メモリ用もあればそれも）を置きます。
+### Taildrop で送る
 
-- Finder で Google ドライブ（`~/Library/CloudStorage/GoogleDrive-*/マイドライブ/`）にコピーする
-- ブラウザで drive.google.com にアップロードする
+1. Finder でデスクトップの `$PROJ.tar.gz` と `$PROJ-claude.tar.gz` を選ぶ
+2. 右クリック →「共有」→「Tailscale」→ 送り先（Windows 環境の PC）を選ぶ
+   - 「共有」に Tailscale が無いときは、「共有」→「編集…」（または システム設定 → 機能拡張 → 共有）で Tailscale を有効にする
+
+ターミナルから送ることもできます。
+
+```bash
+alias tailscale=/Applications/Tailscale.app/Contents/MacOS/Tailscale   # tailscale コマンドが無い場合
+tailscale status                                                       # 送り先の名前を確認
+tailscale file cp ~/Desktop/$PROJ.tar.gz ~/Desktop/$PROJ-claude.tar.gz <送り先名>:
+```
+
+- 送り先の名前は Tailscale 上の名前です。WSL のホスト名とは違うことがあります
+- 最後の `:` は必須です
+
+（Taildrop が使えない場合）Google ドライブ（`~/Library/CloudStorage/GoogleDrive-*/マイドライブ/` または drive.google.com）に置き、Windows 側でダウンロードします。
 
 ---
 
 ## 3. Windows 環境: 受け取りと展開
 
-1. Windows 側で tar をダウンロードする
-   - ブラウザでダウンロードした場合: `C:\Users\<Windowsユーザー>\Downloads\`
-   - Google Drive for desktop を使っている場合: `G:\マイドライブ\` からダウンロードフォルダへコピーする
+1. 受け取りを確認する
+   - Windows 側の Tailscale で受け取った場合、`C:\Users\<Windowsユーザー>\Downloads\` に自動で保存されます
+   - WSL の中の Tailscale で受け取る場合は `sudo tailscale file get ~/inbox/` で取り出し、以降の `WIN_DL` を `~/inbox` に読み替えます
+
+   ```bash
+   WIN_DL=/mnt/c/Users/<Windowsユーザー>/Downloads
+   ls -lh $WIN_DL/$PROJ.tar.gz $WIN_DL/$PROJ-claude.tar.gz
+   ```
+
+   - `ls $WIN_DL/` の一覧が `Input/output error` で途中までしか出ないことがあります。上のようにファイル名を直接指定すれば確認できます
 2. WSL に移動先が無いことを確認する
 
    ```bash
@@ -96,7 +135,6 @@ tar -czf ~/Desktop/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/<上で見�
 3. 展開する
 
    ```bash
-   WIN_DL=/mnt/c/Users/<Windowsユーザー>/Downloads
    tar -xzf $WIN_DL/$PROJ.tar.gz -C ~/dev
    ```
 
@@ -113,12 +151,30 @@ tar -czf ~/Desktop/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/<上で見�
    git status    # clean に戻ったことを確認
    ```
 
-5. （任意）Claude Code のメモリを展開する
+5. Claude Code のセッション履歴とメモリを展開し、中の Mac のパスを WSL のパスに置き換える
 
    ```bash
-   mkdir -p ~/.claude/projects/-home-$USER-dev-$PROJ
-   tar -xzf $WIN_DL/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/-home-$USER-dev-$PROJ
+   DST=/home/$USER/.claude/projects/-home-$USER-dev-$PROJ
+   mkdir -p "$DST"
+   tar -xzf $WIN_DL/$PROJ-claude.tar.gz -C "$DST"
+
+   # Mac の ._* ファイルが混ざっていたら削除
+   find "$DST" -name '._*' -delete
+
+   # バックアップを取ってから、Mac のパスを置き換える
+   tar -czf ~/$PROJ-claude-before-fix.tar.gz -C "$DST" .
+   MACUSER=<macユーザー>
+   grep -rl "/Users/" "$DST" | xargs -r sed -i \
+     -e "s#/Users/$MACUSER/\.claude/projects/-Users-$MACUSER-dev-$PROJ#/home/$USER/.claude/projects/-home-$USER-dev-$PROJ#g" \
+     -e "s#/Users/$MACUSER/#/home/$USER/#g"
+
+   # 残りを確認（会話の文章に出てくる "/Users/..." などは残っていても問題なし）
+   grep -roh '.\{20\}/Users/.\{20\}' "$DST"
    ```
+
+   - フォルダ名が `-` で始まるので、相対パスでコマンドに渡すとオプションと解釈されて失敗します（`sed: invalid option -- 'h'` など）。上のように絶対パスを使います
+   - `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr...'` という警告は、Mac の拡張属性を読み飛ばしただけなので無視して OK です
+   - `sessions-index.json` の `originalPath` に古い場所（`~/github/...` など）が残っていたら、`/home/<WSLユーザー>/dev/$PROJ` に直します
 
 ---
 
@@ -130,13 +186,14 @@ tar -czf ~/Desktop/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/<上で見�
    cd ~/dev/$PROJ
    git status        # clean（または Mac と同じ未コミット状態）であること
    git remote -v
-   git fetch         # WSL 側の GitHub 認証で通ること
+   git fetch         # WSL 側の GitHub 認証で通ること（リモートが無ければ不要）
    ```
 
-2. Mac の絶対パスが残っていないか探す
+2. Mac のファイルやパスが残っていないか探す
 
    ```bash
-   grep -rn "/Users/" .claude config 2>/dev/null
+   find . -name '._*' | head                     # 出たら find . -name '._*' -delete
+   grep -rn "/Users/" .claude config deploy 2>/dev/null
    ```
 
    - ヒットした箇所は WSL のパス（`/home/<WSLユーザー>/...`）に直すか、不要なら削除します。`.claude/settings.local.json` の許可コマンドなどに残っていることがあります
@@ -147,9 +204,16 @@ tar -czf ~/Desktop/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/<上で見�
    npm install                                                                         # Node.js
    ```
 
-4. 主要なスクリプトを1つ動かして、正常に動くことを確認する
-   - 例: `python3 scripts/main.py` など、普段使っているコマンド
-5. `~/dev/$PROJ` で Claude Code を起動し、`pmo/README.md` を読ませて状況を把握できることを確認する
+4. テストや主要なスクリプトを動かして、正常に動くことを確認する
+   - 例: `python3 -m unittest`、`python3 scripts/main.py` など、普段使っているコマンド
+   - VPS などにデプロイしているプロジェクトは、WSL から `ssh <ホスト> true` で接続できるかも確認します（SSH 鍵と `~/.ssh/config` が必要）
+5. Claude Code のセッションを確認する
+
+   ```bash
+   cd ~/dev/$PROJ && claude --resume
+   ```
+
+   - Mac 時代のセッションが一覧に出れば OK です。再開したら、最初に「Mac から WSL に移った」と伝えるとスムーズです
 
 ---
 
@@ -157,11 +221,8 @@ tar -czf ~/Desktop/$PROJ-claude-memory.tar.gz -C ~/.claude/projects/<上で見�
 
 ```bash
 cd ~/dev/dev-management
+cd data && git pull --rebase origin main && cd ..
 python3 scan.py
-cd data
-git pull --rebase origin main
-cd ..
-python3 scan.py --merge-only
 cd data
 git add pc-data/
 git commit -m "scan: $(hostname) $(date +%Y-%m-%d)"
@@ -170,6 +231,7 @@ cd ..
 grep "$PROJ" data/index.md
 ```
 
+- 先に pull してからスキャンします。スキャン後に pull すると、未コミットの変更があるため `cannot pull with rebase: You have unstaged changes.` で止まります
 - `data/index.md` で、`$PROJ` の Windows 環境のホスト名の列が `Main` になっていることを確認します
 - この時点では Mac 側にもまだ残っているので、Mac のホスト名の列にも `Main` が出ます。これは次の手順で解消します
 
@@ -179,15 +241,17 @@ grep "$PROJ" data/index.md
 
 **Windows 環境での動作確認がすべて済んでから**行ってください。
 
-1. プロジェクトと作業用の tar を削除する
+1. プロジェクトと作業用の tar を削除する（`PROJ` が設定されていることを確認してから）
 
    ```bash
+   echo "PROJ=$PROJ"          # 空なら PROJ=... を設定し直す
    rm -rf ~/dev/$PROJ
-   rm -f ~/Desktop/$PROJ.tar.gz ~/Desktop/$PROJ-claude-memory.tar.gz
+   rm -f ~/Desktop/$PROJ.tar.gz ~/Desktop/$PROJ-claude.tar.gz
+   ls -d ~/dev/$PROJ 2>/dev/null && echo "まだある" || echo "消えた"
    ```
 
-2. （任意）Claude Code のメモリも削除する: `~/.claude/projects/-Users-<macユーザー>-dev-$PROJ/`
-3. Mac でスキャンして push する
+2. （任意）Claude Code のセッション履歴とメモリも削除する: `~/.claude/projects/-Users-<macユーザー>-dev-$PROJ/`
+3. Mac でスキャンして push する（**必ず手順 1 で消えたことを確認してから**）
 
    ```bash
    cd ~/dev/dev-management
@@ -201,8 +265,9 @@ grep "$PROJ" data/index.md
    ```
 
    - `scan.py` は `pc-data/{ホスト名}/` を毎回作り直すので、Mac のデータから `$PROJ` が消えます
-4. Windows 環境で `data/` を pull し、`python3 scan.py --merge-only` を実行する。`$PROJ` が Windows 環境だけに出ることを確認します
-5. Google ドライブ上の tar は、しばらくバックアップとして残します。問題がなければ削除してください
+   - 消す前にスキャンすると、Mac の `Main` が残ったままになります。その場合は削除してからスキャンし直します
+4. Windows 環境で `data/` を pull し、`python3 scan.py --merge-only` を実行する。`$PROJ` が Windows 環境だけに出る（Mac の列が `-`）ことを確認します
+5. Windows の `Downloads` にある tar は、しばらくバックアップとして残します。問題がなければ削除してください
 
 ---
 
@@ -210,8 +275,9 @@ grep "$PROJ" data/index.md
 
 - [ ] Windows 環境の `~/dev/$PROJ/pmo/` がある
 - [ ] Windows 環境で `git status` が想定どおり（日本語ファイル名の崩れがない）
-- [ ] `.claude/`・`config/` に Mac のパス（`/Users/...`）が残っていない
-- [ ] 主要スクリプトが Windows 環境で動く
+- [ ] `._*` ファイルが無く、`.claude/`・`config/` に Mac のパス（`/Users/...`）が残っていない
+- [ ] テスト・主要スクリプトが Windows 環境で動く
+- [ ] `claude --resume` で Mac 時代のセッションが出る
 - [ ] `data/index.md` で `$PROJ` が Windows 環境の `Main` だけになっている
 - [ ] Mac の `~/dev/$PROJ` を削除した
-- [ ] Google ドライブの tar を（しばらくしてから）削除した
+- [ ] `Downloads` の tar を（しばらくしてから）削除した
