@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import argparse
+import gzip
 import json
 import os
 import re
@@ -22,6 +25,8 @@ README_SCAN_LINES = 30
 DESCRIPTION_MAX_LEN = 120
 PC_DATA_DIR = "pc-data"
 PROJECTS_SUBDIR = "projects"
+ENV_FILES = ("env.json", "env.md", "packages.txt")
+UNKNOWN = "取得できず"
 
 
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
@@ -149,6 +154,232 @@ def extract_description(readme_path: Path) -> str:
     return "*(no description)*"
 
 
+# ── 環境点検 ──────────────────────────────────────────────────────────────────
+# OS の更新状況を記録する。PC の環境は変更しない（読み取り専用のコマンドだけを使う）
+
+def run_cmd(args: list[str], timeout: int = 30) -> str | None:
+    """コマンドの標準出力。失敗・タイムアウト・コマンドなしは None。"""
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
+                                errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def is_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def read_os_release() -> str:
+    try:
+        text = Path("/etc/os-release").read_text(encoding="utf-8")
+    except OSError:
+        return UNKNOWN
+    m = re.search(r'^PRETTY_NAME="?([^"\n]*)"?', text, re.M)
+    return m.group(1) if m else UNKNOWN
+
+
+def last_apt_upgrade() -> str:
+    """apt の履歴から、パッケージを更新した最後の日時。"""
+    log_dir = Path("/var/log/apt")
+    logs = sorted(log_dir.glob("history.log.*.gz"), key=lambda p: int(p.name.split(".")[2]))
+    for log in [log_dir / "history.log", *logs]:  # 新しい順
+        try:
+            text = (gzip.open(log, "rt", errors="replace").read() if log.suffix == ".gz"
+                    else log.read_text(errors="replace"))
+        except OSError:
+            continue
+        for block in reversed(text.strip().split("\n\n")):
+            if re.search(r"^Upgrade:", block, re.M):
+                m = re.search(r"^Start-Date:\s*(.+)$", block, re.M)
+                if m:
+                    return re.sub(r"\s+", " ", m.group(1).strip())
+    return UNKNOWN
+
+
+def last_apt_list_update() -> str:
+    """最後に apt update した日時（パッケージ一覧の取得時刻）。"""
+    try:
+        ts = max(p.stat().st_mtime for p in Path("/var/lib/apt/lists").iterdir() if p.is_file())
+    except (OSError, ValueError):
+        return UNKNOWN
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def apt_upgradable() -> dict:
+    out = run_cmd(["apt", "list", "--upgradable"], timeout=60)
+    if out is None:
+        return {"count": None, "security": []}
+    pkgs = [line for line in out.splitlines() if "/" in line and "[upgradable" in line]
+    security = [line.split("/")[0] for line in pkgs if "-security" in line.split()[0]]
+    return {"count": len(pkgs), "security": security}
+
+
+def collect_linux() -> dict:
+    upgradable = apt_upgradable()
+    return {
+        "os": read_os_release(),
+        "kernel": (run_cmd(["uname", "-r"]) or UNKNOWN).strip(),
+        "last_upgrade": last_apt_upgrade(),
+        "last_list_update": last_apt_list_update(),
+        "pending": upgradable["count"],
+        "pending_security": upgradable["security"],
+    }
+
+
+# PowerShell の既定の出力は Shift-JIS で文字化けするため UTF-8 を指定する
+PS_PREFIX = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+PS_OS_INFO = (
+    '$os=Get-CimInstance Win32_OperatingSystem; '
+    '$ubr=(Get-ItemProperty "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion").UBR; '
+    '$hf=Get-HotFix | Where-Object InstalledOn | Sort-Object InstalledOn -Descending | Select-Object -First 1; '
+    '[pscustomobject]@{caption=$os.Caption; build="$($os.BuildNumber).$ubr"; '
+    'last_hotfix=$hf.HotFixID; last_hotfix_date=$hf.InstalledOn.ToString("yyyy-MM-dd")} | ConvertTo-Json -Compress'
+)
+# 未適用の更新を検索するだけ（ダウンロード・インストールはしない）
+PS_PENDING = (
+    '$r=(New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0"); '
+    'ConvertTo-Json -Compress @(@($r.Updates | ForEach-Object { $_.Title }))'
+)
+
+
+def run_powershell(script: str, timeout: int) -> object | None:
+    # Windows 側のコマンドは WSL の cwd が UNC パスだと警告を出すため、Windows のドライブ上で実行する
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", PS_PREFIX + script],
+                                capture_output=True, text=True, timeout=timeout,
+                                encoding="utf-8", errors="replace", cwd="/mnt/c")
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return None
+
+
+def wsl_version() -> str:
+    try:
+        result = subprocess.run(["wsl.exe", "--version"], capture_output=True, timeout=30, cwd="/mnt/c")
+    except (OSError, subprocess.TimeoutExpired):
+        return UNKNOWN
+    text = result.stdout.decode("utf-16-le", errors="replace")
+    first = text.replace("\r", "").strip().splitlines()[:1]
+    return first[0].split(":")[-1].strip() if first else UNKNOWN
+
+
+def collect_windows_from_wsl() -> dict:
+    info = run_powershell(PS_OS_INFO, timeout=60) or {}
+    pending = run_powershell(PS_PENDING, timeout=120)
+    return {
+        "os": f"{info.get('caption', UNKNOWN)} (build {info.get('build', '?')})" if info else UNKNOWN,
+        "last_upgrade": (f"{info.get('last_hotfix_date')} ({info.get('last_hotfix')})"
+                         if info.get("last_hotfix") else UNKNOWN),
+        "pending": len(pending) if isinstance(pending, list) else None,
+        "pending_titles": pending if isinstance(pending, list) else [],
+        "wsl_version": wsl_version(),
+    }
+
+
+def collect_macos() -> dict:
+    sw = run_cmd(["sw_vers"]) or ""
+    name = re.search(r"ProductName:\s*(.+)", sw)
+    ver = re.search(r"ProductVersion:\s*(.+)", sw)
+    build = re.search(r"BuildVersion:\s*(.+)", sw)
+    os_name = (f"{name.group(1).strip()} {ver.group(1).strip()} ({build.group(1).strip()})"
+               if name and ver and build else UNKNOWN)
+
+    last = UNKNOWN
+    history = run_cmd(["softwareupdate", "--history"], timeout=60)
+    if history:
+        dates = []
+        for line in history.splitlines():
+            # XProtect などの定義データは自動で入るため、OS の更新としては数えない
+            if re.search(r"XProtect|MRT|Gatekeeper|ConfigData|Configuration Data", line):
+                continue
+            m = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", line)
+            try:
+                if m:
+                    dates.append(datetime.strptime(m.group(1), "%m/%d/%Y"))
+            except ValueError:
+                pass
+        if dates:
+            last = max(dates).strftime("%Y-%m-%d")
+
+    # 未適用の更新を Apple に問い合わせるだけ（インストールはしない）
+    listing = run_cmd(["softwareupdate", "-l"], timeout=120)
+    titles = (re.findall(r"^\s*\* Label:\s*(.+)$", listing, re.M) if listing is not None else [])
+    return {
+        "os": os_name,
+        "last_upgrade": last,
+        "pending": len(titles) if listing is not None else None,
+        "pending_titles": titles,
+    }
+
+
+def collect_packages() -> str:
+    if sys.platform == "darwin":
+        return run_cmd(["brew", "list", "--versions"], timeout=60) or ""
+    return run_cmd(["dpkg-query", "-W", "-f=${Package} ${Version}\n"], timeout=60) or ""
+
+
+def collect_env() -> dict:
+    env: dict = {"checked_at": datetime.now().astimezone().isoformat()}
+    if sys.platform == "darwin":
+        env["macos"] = collect_macos()
+    elif sys.platform.startswith("linux"):
+        env["linux"] = collect_linux()
+        if is_wsl():
+            env["windows"] = collect_windows_from_wsl()
+    return env
+
+
+def fmt_pending(n: int | None, security: list | None = None) -> str:
+    if n is None:
+        return UNKNOWN
+    return f"{n} 件（セキュリティ {len(security)} 件）" if security is not None else f"{n} 件"
+
+
+def env_summary_rows(env: dict) -> list[tuple[str, str, str, str]]:
+    """(区分, OS, 最終更新, 更新待ち) の行。"""
+    rows = []
+    if "linux" in env:
+        x = env["linux"]
+        rows.append(("Linux" + (" (WSL)" if "windows" in env else ""), x["os"],
+                     x["last_upgrade"], fmt_pending(x["pending"], x["pending_security"])
+                     + f" ※ apt update: {x['last_list_update']} 時点"))
+    if "windows" in env:
+        x = env["windows"]
+        rows.append(("Windows", x["os"], x["last_upgrade"], fmt_pending(x["pending"])))
+    if "macos" in env:
+        x = env["macos"]
+        rows.append(("macOS", x["os"], x["last_upgrade"], fmt_pending(x["pending"])))
+    return rows
+
+
+def write_env(env: dict, packages: str, pc_root: Path, hostname: str):
+    (pc_root / "env.json").write_text(json.dumps(env, indent=2, ensure_ascii=False), encoding="utf-8")
+    (pc_root / "packages.txt").write_text(packages, encoding="utf-8")
+
+    lines = [f"# PC Environment — {hostname}", "",
+             f"Checked: {env['checked_at'][:16].replace('T', ' ')}", "",
+             "| 区分 | OS | 最終更新 | 更新待ち |", "|------|----|----------|----------|"]
+    lines += [f"| {' | '.join(r)} |" for r in env_summary_rows(env)]
+    if "linux" in env:
+        x = env["linux"]
+        lines += ["", "## Linux", "", f"- カーネル: {x['kernel']}",
+                  f"- セキュリティ更新待ち: {', '.join(x['pending_security']) or 'なし'}"]
+    if "windows" in env:
+        x = env["windows"]
+        lines += ["", "## Windows", "", f"- WSL: {x['wsl_version']}", "- 未適用の更新:"]
+        lines += [f"  - {t}" for t in x["pending_titles"]] or ["  - なし"]
+    if "macos" in env:
+        lines += ["", "## macOS", "", "- 未適用の更新:"]
+        lines += [f"  - {t}" for t in env["macos"]["pending_titles"]] or ["  - なし"]
+    lines += ["", "パッケージの一覧: `packages.txt`", ""]
+    (pc_root / "env.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 # ── 書き込み ──────────────────────────────────────────────────────────────────
 
 def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Path) -> dict:
@@ -220,9 +451,13 @@ def discover_pc_data(data_root: Path) -> list[dict]:
         try:
             meta = json.loads((subdir / "meta.json").read_text(encoding="utf-8"))
             entries = json.loads((subdir / "entries.json").read_text(encoding="utf-8"))
+            try:
+                env = json.loads((subdir / "env.json").read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                env = None
             results.append({"hostname": meta.get("hostname", subdir.name),
                             "scanned_at": meta.get("scanned_at", ""),
-                            "entries": entries})
+                            "entries": entries, "env": env})
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"Warning: {subdir.name} をスキップ ({e})", flush=True)
     return results
@@ -277,10 +512,23 @@ def write_merged_index(data_root: Path) -> int:
         for updated, path, desc in recent[:15]
     )
     rows_str = "\n".join(rows)
+    env_rows = []
+    for pc in pc_data:
+        if not pc["env"]:
+            env_rows.append(f"| {pc['hostname']} | 未点検 | - | - | - | - |")
+            continue
+        checked = pc["env"]["checked_at"][:16].replace("T", " ")
+        env_rows += [f"| {pc['hostname']} | {checked} | {' | '.join(r)} |"
+                     for r in env_summary_rows(pc["env"])]
+    env_rows_str = "\n".join(env_rows)
     content = (
         f"# Dev Projects Index (All PCs)\n\n"
         f"Last merged: {now}\n"
         f"PCs: {pc_header}\n\n"
+        f"## PC環境（OS の更新状況）\n\n"
+        f"| PC | 点検日時 | 区分 | OS | 最終更新 | 更新待ち |\n"
+        f"|----|----------|------|----|----------|----------|\n"
+        f"{env_rows_str}\n\n"
         f"## サマリ\n\n"
         f"| 区分 | 件数 |\n"
         f"|------|-----:|\n"
@@ -306,6 +554,8 @@ def main():
     parser = argparse.ArgumentParser(description="~/dev/ プロジェクトスキャナー")
     parser.add_argument("--merge-only", action="store_true",
                         help="スキャンをスキップして index.md だけ再生成する")
+    parser.add_argument("--skip-env", action="store_true",
+                        help="環境点検をスキップする（前回の点検結果は残す）")
     args = parser.parse_args()
 
     hostname_raw = get_stable_hostname()
@@ -330,8 +580,15 @@ def main():
         return
 
     pc_root = data_root / PC_DATA_DIR / hostname
+    # --skip-env のときは前回の点検結果を作り直しの前に退避する
+    kept_env = {}
+    if args.skip_env:
+        kept_env = {name: (pc_root / name).read_bytes()
+                    for name in ENV_FILES if (pc_root / name).exists()}
     shutil.rmtree(pc_root, ignore_errors=True)
     pc_root.mkdir(parents=True)
+    for name, content in kept_env.items():
+        (pc_root / name).write_bytes(content)
 
     projects = find_projects(dev_root, self_path)
 
@@ -355,9 +612,19 @@ def main():
     write_pc_meta(entries, pc_root, hostname, hostname_raw, dev_root)
     write_pc_entries(entries, pc_root)
     write_pc_index(entries, pc_root, hostname)
+
+    if not args.skip_env:
+        print("環境を点検しています（Windows Update の確認に数十秒かかることがあります）...", flush=True)
+        write_env(collect_env(), collect_packages(), pc_root, hostname)
+
     unique = write_merged_index(data_root)
 
     print(f"Scanned {len(entries)} projects [{hostname}] → data/ (merged: {unique} unique)")
+    if (pc_root / "env.json").exists():
+        env = json.loads((pc_root / "env.json").read_text(encoding="utf-8"))
+        print(f"\nPC環境 [{hostname}]（点検: {env['checked_at'][:16].replace('T', ' ')}）")
+        for kind, os_name, last, pending in env_summary_rows(env):
+            print(f"  {kind}: {os_name} / 最終更新 {last} / 更新待ち {pending}")
 
 
 if __name__ == "__main__":
