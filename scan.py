@@ -240,10 +240,12 @@ PS_OS_INFO = (
     '[pscustomobject]@{caption=$os.Caption; build="$($os.BuildNumber).$ubr"; '
     'last_hotfix=$hf.HotFixID; last_hotfix_date=$hf.InstalledOn.ToString("yyyy-MM-dd")} | ConvertTo-Json -Compress'
 )
-# 未適用の更新を検索するだけ（ダウンロード・インストールはしない）
+# 未適用の更新を検索するだけ（ダウンロード・インストールはしない）。
+# ドライバー（Type=2）と「オプションの更新プログラム」（BrowseOnly）は重要度が低いため報告しない
 PS_PENDING = (
     '$r=(New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0"); '
-    'ConvertTo-Json -Compress @(@($r.Updates | ForEach-Object { $_.Title }))'
+    'ConvertTo-Json -Compress @(@($r.Updates | Where-Object { $_.Type -eq 1 -and -not $_.BrowseOnly } '
+    '| ForEach-Object { $_.Title }))'
 )
 
 
