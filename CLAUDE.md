@@ -32,7 +32,7 @@ python3 scan.py
 ```bash
 cd data
 git add pc-data/
-git commit -m "scan: $(hostname) $(date +%Y-%m-%d)"
+git commit -m "scan: $(scutil --get LocalHostName 2>/dev/null || hostname) $(date +%Y-%m-%d)"
 git push origin main
 cd ..
 ```
@@ -46,7 +46,7 @@ cd data && git pull --rebase origin main && cd ..
 python3 scan.py
 cd data
 git add pc-data/
-git commit -m "scan: $(hostname) $(date +%Y-%m-%d)"
+git commit -m "scan: $(scutil --get LocalHostName 2>/dev/null || hostname) $(date +%Y-%m-%d)"
 git push origin main
 cd ..
 ```
@@ -104,7 +104,7 @@ python3 scan.py --merge-only
 # 3. push
 cd data
 git add pc-data/
-git commit -m "scan: $(hostname) $(date +%Y-%m-%d)"
+git commit -m "scan: $(scutil --get LocalHostName 2>/dev/null || hostname) $(date +%Y-%m-%d)"
 git push origin main
 cd ..
 ```
