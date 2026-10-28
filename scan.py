@@ -299,10 +299,14 @@ def collect_macos() -> dict:
             # XProtect などの定義データは自動で入るため、OS の更新としては数えない
             if re.search(r"XProtect|MRT|Gatekeeper|ConfigData|Configuration Data", line):
                 continue
-            m = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", line)
+            # 日付の形式は地域設定で変わる（英語: 10/28/2026、日本語: 2026/10/28）
+            m = re.search(r"\b(\d{4})/(\d{1,2})/(\d{1,2})\b", line)
+            m2 = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", line)
             try:
                 if m:
-                    dates.append(datetime.strptime(m.group(1), "%m/%d/%Y"))
+                    dates.append(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+                elif m2:
+                    dates.append(datetime(int(m2.group(3)), int(m2.group(1)), int(m2.group(2))))
             except ValueError:
                 pass
         if dates:
