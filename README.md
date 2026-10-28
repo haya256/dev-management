@@ -100,16 +100,10 @@ cd ..
 ### 日常の同期手順
 
 ```bash
-python3 scan.py                         # スキャン
-
-cd data
-git pull --rebase origin main           # 他 PC の最新を取得
-python3 ../scan.py --merge-only        # 取得後に index.md を再生成
-git add pc-data/
-git commit -m "scan: $(scutil --get LocalHostName 2>/dev/null || hostname) $(date +%Y-%m-%d)"
-git push origin main
-cd ..
+./sync.sh
 ```
+
+スキャン → commit → 他 PC の最新を取得（`git pull --rebase`）→ `index.md` 再生成 → push を順に行います。変更がなければ commit と push は飛ばします。`./sync.sh --skip-env` のように、`scan.py` のオプションをそのまま渡せます。
 
 ### プロジェクトを別 PC へ移動する
 

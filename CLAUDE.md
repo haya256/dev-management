@@ -42,13 +42,7 @@ cd ..
 最新データに更新してからスキャン:
 
 ```bash
-cd data && git pull --rebase origin main && cd ..
-python3 scan.py
-cd data
-git add pc-data/
-git commit -m "scan: $(scutil --get LocalHostName 2>/dev/null || hostname) $(date +%Y-%m-%d)"
-git push origin main
-cd ..
+./sync.sh
 ```
 
 ### パターン C: スキャン済みで最新の状態
@@ -92,22 +86,11 @@ python3 scan.py --merge-only  # スキャンなし、index.md だけ再生成（
 ## data/ リポジトリの同期手順（日常運用）
 
 ```bash
-# 1. スキャン
-python3 scan.py
-
-# 2. 他PCの最新を取得 → index.md 再生成
-cd data
-git pull --rebase origin main
-cd ..
-python3 scan.py --merge-only
-
-# 3. push
-cd data
-git add pc-data/
-git commit -m "scan: $(scutil --get LocalHostName 2>/dev/null || hostname) $(date +%Y-%m-%d)"
-git push origin main
-cd ..
+./sync.sh             # スキャン → commit → 他PCの最新を取得 → index.md 再生成 → push
+./sync.sh --skip-env  # scan.py のオプションはそのまま渡せる
 ```
+
+ユーザーから「再スキャンして」と言われたら `./sync.sh` を実行し、終わったら「PC環境」を報告する。
 
 ---
 
