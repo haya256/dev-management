@@ -25,7 +25,7 @@ python3 scan.py --merge-only
 | 環境 | 記録する内容 |
 |------|------|
 | Linux（Ubuntu など） | OS・カーネル、最後に apt で更新した日時、最後に `apt update` した日時、更新待ちの件数（うちセキュリティ更新） |
-| WSL の場合の Windows 側 | Windows のビルド番号、最後に入った更新プログラム、未適用の Windows Update（ドライバーとオプションの更新プログラムは除く）、WSL のバージョン |
+| WSL の場合の Windows 側 | Windows のビルド番号、最後に入った更新プログラム、未適用の Windows Update（ドライバー・オプションの更新プログラム・Defender などの定義ファイルは除く）、WSL のバージョン |
 | macOS | OS のバージョン、最後に入ったソフトウェアアップデート、未適用のアップデート |
 
 あわせて、入っているパッケージの一覧（`dpkg-query` / `brew list --versions`）を保存します。脆弱性が出たときに、別の PC からでも照合できるようにするためです。

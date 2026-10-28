@@ -241,10 +241,12 @@ PS_OS_INFO = (
     'last_hotfix=$hf.HotFixID; last_hotfix_date=$hf.InstalledOn.ToString("yyyy-MM-dd")} | ConvertTo-Json -Compress'
 )
 # 未適用の更新を検索するだけ（ダウンロード・インストールはしない）。
-# ドライバー（Type=2）と「オプションの更新プログラム」（BrowseOnly）は重要度が低いため報告しない
+# ドライバー（Type=2）と「オプションの更新プログラム」（BrowseOnly）は重要度が低いため報告しない。
+# Defender などの定義ファイル（カテゴリ「定義の更新」）は自動で入るため、OS の更新としては数えない
 PS_PENDING = (
     '$r=(New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0"); '
-    'ConvertTo-Json -Compress @(@($r.Updates | Where-Object { $_.Type -eq 1 -and -not $_.BrowseOnly } '
+    'ConvertTo-Json -Compress @(@($r.Updates | Where-Object { $_.Type -eq 1 -and -not $_.BrowseOnly '
+    '-and -not ($_.Categories | Where-Object { $_.CategoryID -eq "e0789628-ce08-4437-be74-2495b842f43b" }) } '
     '| ForEach-Object { $_.Title }))'
 )
 
