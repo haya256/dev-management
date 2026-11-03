@@ -9,7 +9,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +32,16 @@ UNKNOWN = "取得できず"
 
 
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
+@contextmanager
+def timed(label: str):
+    # どの処理に時間がかかったかを分かるように、所要時間を表示する
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        print(f"  {label}: {time.monotonic() - start:.1f} 秒", flush=True)
+
+
 
 def sanitize_hostname(raw: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
@@ -273,8 +285,10 @@ def wsl_version() -> str:
 
 
 def collect_windows_from_wsl() -> dict:
-    info = run_powershell(PS_OS_INFO, timeout=60) or {}
-    pending = run_powershell(PS_PENDING, timeout=120)
+    with timed("Windows の OS 情報"):
+        info = run_powershell(PS_OS_INFO, timeout=60) or {}
+    with timed("Windows Update の確認"):
+        pending = run_powershell(PS_PENDING, timeout=120)
     return {
         "os": f"{info.get('caption', UNKNOWN)} (build {info.get('build', '?')})" if info else UNKNOWN,
         "last_upgrade": (f"{info.get('last_hotfix_date')} ({info.get('last_hotfix')})"
@@ -334,9 +348,11 @@ def collect_packages() -> str:
 def collect_env() -> dict:
     env: dict = {"checked_at": datetime.now().astimezone().isoformat()}
     if sys.platform == "darwin":
-        env["macos"] = collect_macos()
+        with timed("macOS のソフトウェアアップデートの確認"):
+            env["macos"] = collect_macos()
     elif sys.platform.startswith("linux"):
-        env["linux"] = collect_linux()
+        with timed("apt の確認"):
+            env["linux"] = collect_linux()
         if is_wsl():
             env["windows"] = collect_windows_from_wsl()
     return env
@@ -598,6 +614,7 @@ def main():
     for name, content in kept_env.items():
         (pc_root / name).write_bytes(content)
 
+    scan_start = time.monotonic()
     projects = find_projects(dev_root, self_path)
 
     seen_keys: dict[str, int] = {}
@@ -620,10 +637,14 @@ def main():
     write_pc_meta(entries, pc_root, hostname, hostname_raw, dev_root)
     write_pc_entries(entries, pc_root)
     write_pc_index(entries, pc_root, hostname)
+    print(f"  プロジェクトのスキャン: {time.monotonic() - scan_start:.1f} 秒", flush=True)
 
     if not args.skip_env:
         print("環境を点検しています（Windows Update の確認に数十秒かかることがあります）...", flush=True)
-        write_env(collect_env(), collect_packages(), pc_root, hostname)
+        env = collect_env()
+        with timed("パッケージ一覧"):
+            packages = collect_packages()
+        write_env(env, packages, pc_root, hostname)
 
     unique = write_merged_index(data_root)
 
