@@ -214,12 +214,22 @@ def last_apt_upgrade() -> str:
 
 
 def last_apt_list_update() -> str:
-    """最後に apt update した日時（パッケージ一覧の取得時刻）。"""
-    try:
-        ts = max(p.stat().st_mtime for p in Path("/var/lib/apt/lists").iterdir() if p.is_file())
-    except (OSError, ValueError):
+    """最後に apt update した日時（パッケージ一覧の取得時刻）。
+
+    一覧ファイル自体の更新時刻は配信元の公開時刻に合わせられるため使えない。
+    apt update のたびに書き換わる作業用ディレクトリ partial/ の更新時刻を見る。
+    partial/ がない環境では、一覧ディレクトリの更新時刻で代用する。
+    """
+    lists = Path("/var/lib/apt/lists")
+    times = []
+    for d in (lists / "partial", lists):
+        try:
+            times.append(d.stat().st_mtime)
+        except OSError:
+            continue
+    if not times:
         return UNKNOWN
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    return datetime.fromtimestamp(max(times)).strftime("%Y-%m-%d %H:%M")
 
 
 def apt_upgradable() -> dict:
