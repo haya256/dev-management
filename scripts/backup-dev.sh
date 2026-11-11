@@ -81,16 +81,40 @@ for e in "${EXCLUDES[@]}"; do
   args+=(--exclude="$e")
 done
 
+# 実行結果を logs/backup.log（git 管理外）に 1 行追記する。rsync / tar の実行時だけ。
+# 書式: 日時 モード 結果 所要秒数 保存先
+LOG="$REPO_DIR/logs/backup.log"
+result="成功"
+started=0
+start_log() {
+  started=$SECONDS
+  # trap は関数の外（スクリプト終了時）に動くので、started はグローバル変数にしてある
+  trap '
+    rc=$?
+    [ "$rc" -ne 0 ] && result="失敗(rc=$rc)"
+    mkdir -p "$(dirname "$LOG")"
+    printf "%s %s %s %s秒 %s\n" "$(date "+%Y-%m-%d %H:%M:%S")" "$MODE" "$result" "$((SECONDS - started))" "$DEST" >> "$LOG" || true
+  ' EXIT
+}
+
 if [ "$MODE" = "tar" ]; then
+  start_log
   out="$DEST/dev-$(date +%Y%m%d-%H%M).tar.gz"
   echo "== tar 作成: $out =="
   # 終了コード 1 は「読み込み中にファイルが変わった」等の警告なので続行
   tar czf "$out" "${args[@]}" -C "$HOME" dev || {
-    rc=$?; [ "$rc" -eq 1 ] && echo "警告: tar が一部ファイルで警告を出しました (rc=$rc)" || exit "$rc"
+    rc=$?
+    if [ "$rc" -eq 1 ]; then
+      result="警告(tar rc=$rc)"
+      echo "警告: tar が一部ファイルで警告を出しました (rc=$rc)"
+    else
+      exit "$rc"
+    fi
   }
   ls -lh "$out"
 
 elif [ "$MODE" = "rsync" ]; then
+  start_log
   target_dir="$DEST/dev"
   marker="$target_dir/.dev-backup"
   # --delete で無関係なファイルを消さないよう、このスクリプトが作ったフォルダか確認する
@@ -115,7 +139,8 @@ elif [ "$MODE" = "rsync" ]; then
         --exclude=/.dev-backup "${args[@]}" "$SRC/" "$target_dir/" || {
     rc=$?
     case "$rc" in
-      23|24) echo "警告: rsync が一部ファイルをスキップしました (rc=$rc、シンボリックリンク等)" ;;
+      23|24) result="警告(rsync rc=$rc)"
+             echo "警告: rsync が一部ファイルをスキップしました (rc=$rc、シンボリックリンク等)" ;;
       *)     exit "$rc" ;;
     esac
   }

@@ -7,6 +7,9 @@ config/
 # ユーザーデータ（非公開）
 data/
 
+# 実行ログ（非公開）
+logs/
+
 # macOS
 .DS_Store
 
