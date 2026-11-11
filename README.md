@@ -109,6 +109,10 @@ cd ..
 
 [docs/move-project-mac-to-windows.md](docs/move-project-mac-to-windows.md) — Mac のプロジェクトを Windows 環境（WSL）へ移す手順
 
+### `~/dev/` をバックアップする
+
+[docs/backup.md](docs/backup.md) — `scripts/backup-dev.sh` で `~/dev/` を外付けドライブなどへバックアップする手順
+
 ## 仕様
 
 - `~/dev/` は読み取りのみ。変更・削除は一切行いません
