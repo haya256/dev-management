@@ -62,6 +62,9 @@ cd ..
 5. `data/pc-data/{hostname}/env.md` — その PC の OS の更新状況（`env.json` は機械で読む用）
 6. `data/pc-data/{hostname}/packages.txt` — その PC に入っているパッケージの一覧（apt / Homebrew）
 
+`Description` 列は、`pmo/README.md` の「目的」の節を優先して取る（プロジェクトのコンセプトは pmo 側にある）。
+ルートの `README.md` はそのプロジェクトで作ったツール（手段）の説明なので、pmo に目的が書かれていないときだけ使う。
+
 `Main` 列が `YES` のプロジェクトは、そのPCに `pmo/` ディレクトリがある（＝メインの開発場所）。
 
 ### プロジェクトに言及するときのルール

@@ -134,16 +134,71 @@ def get_last_activity(project_path: Path) -> str:
 
 
 def main_readme(project_path: Path) -> Path:
-    """説明の元になる README。ルートに無ければ pmo/README.md（pmo/ だけを持つプロジェクト）。"""
+    """プロジェクトを代表する README。ルートに無ければ pmo/README.md（pmo/ だけを持つプロジェクト）。"""
     root_readme = project_path / "README.md"
     return root_readme if root_readme.exists() else project_path / "pmo" / "README.md"
+
+
+NO_DESCRIPTION = "*(no description)*"
+PURPOSE_HEADING = re.compile(r"^(#+)\s*目的")
+# pmo-init のひな形のまま、まだ書かれていない目的。説明としては使わない。
+PURPOSE_PLACEHOLDER = re.compile(r"^[（(]?\s*(未記入|未定|TODO|TBD)\s*[）)]?$", re.IGNORECASE)
+
+
+def clean_description_line(line: str) -> str:
+    """Markdown の装飾を落とす（長さは切り詰めない）。"""
+    cleaned = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", line)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"[*_`~]+", "", cleaned)
+    return cleaned.replace("|", "／").strip()
+
+
+def truncate_description(text: str) -> str:
+    if len(text) > DESCRIPTION_MAX_LEN:
+        return text[:DESCRIPTION_MAX_LEN - 1] + "…"
+    return text
+
+
+def extract_purpose(pmo_readme_path: Path) -> str:
+    """pmo/README.md の「目的」の節の最初の段落（箇条書きなら最初のひとかたまり）。
+
+    節が無い・未記入なら空文字。目的が2行に分けて書かれていることがあるので、
+    1行目だけでなく空行までをつないで返す。
+    """
+    try:
+        text = pmo_readme_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    level = 0  # 0 = まだ「目的」の節に入っていない
+    parts = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        heading = re.match(r"^(#+)\s", stripped)
+        if level == 0:
+            m = PURPOSE_HEADING.match(stripped)
+            if m:
+                level = len(m.group(1))
+            continue
+        if heading:
+            if parts or len(heading.group(1)) <= level:
+                break  # 段落か「目的」の節が終わった
+            continue  # 本文より前にある小見出しは読み飛ばす
+        if not stripped:
+            if parts:
+                break  # 最初の段落が終わった
+            continue
+        cleaned = clean_description_line(stripped)
+        if cleaned and not PURPOSE_PLACEHOLDER.match(cleaned):
+            parts.append(cleaned)
+    return truncate_description(" ".join(parts))
 
 
 def extract_description(readme_path: Path) -> str:
     try:
         text = readme_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return "*(no description)*"
+        return NO_DESCRIPTION
 
     lines = text.splitlines()[:README_SCAN_LINES]
     found_heading = False
@@ -155,15 +210,21 @@ def extract_description(readme_path: Path) -> str:
             continue
         if not stripped or stripped.startswith("#"):
             continue
-        cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", stripped)
-        cleaned = re.sub(r"[*_`~]+", "", cleaned)
-        cleaned = cleaned.strip()
+        cleaned = clean_description_line(stripped)
         if cleaned:
-            if len(cleaned) > DESCRIPTION_MAX_LEN:
-                cleaned = cleaned[:DESCRIPTION_MAX_LEN - 1] + "…"
-            return cleaned
+            return truncate_description(cleaned)
 
-    return "*(no description)*"
+    return NO_DESCRIPTION
+
+
+def project_description(project_path: Path) -> str:
+    """一覧に出す説明。プロジェクトのコンセプトは pmo/README.md の「目的」にあるので、それを優先する。
+
+    ルートの README はそのプロジェクトで作ったツール（手段）の説明なので、
+    pmo に目的が書かれていないときだけ使う。
+    """
+    return (extract_purpose(project_path / "pmo" / "README.md")
+            or extract_description(main_readme(project_path)))
 
 
 # ── 環境点検 ──────────────────────────────────────────────────────────────────
@@ -432,7 +493,7 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
         shutil.copy2(pmo_readme, pmo_out / "README.md")
 
     rel = "~/" + str(project_path.relative_to(Path.home()))
-    description = extract_description(main_readme(project_path))
+    description = project_description(project_path)
     return {"key": key, "path": rel, "has_pmo": has_pmo,
             "last_activity": get_last_activity(project_path),
             "description": description}
