@@ -6,6 +6,7 @@
 #
 # バックアップ先は PC ごとに違うため、このファイルには書かない。
 #   config/backup.conf に  BACKUP_DEST=/path/to/backup  と書く（環境変数 BACKUP_DEST でも可）。
+#   特定のパスを除外したいときは、同じファイルに BACKUP_EXCLUDE_PATHS=( "project/dir" ... ) と書く（~/dev からの相対パス）。
 #   BACKUP_DEST は「保存先フォルダ」（この中に dev/ や tar ができる）。ドライブ直下や、名前が dev のフォルダは避ける。
 #     rsync → $BACKUP_DEST/dev/   tar → $BACKUP_DEST/dev-日付.tar.gz
 #   BACKUP_DEST は事前に作っておくこと（未接続のドライブに偽のバックアップ先を作らないため、自動では作らない）。
@@ -22,13 +23,14 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 CONF="$REPO_DIR/config/backup.conf"
 
-# 環境変数が指定されていればそれを優先し、なければ設定ファイルから読む
-DEST="${BACKUP_DEST:-}"
-if [ -z "$DEST" ] && [ -f "$CONF" ]; then
+# 設定ファイルを読む。BACKUP_DEST は環境変数が指定されていればそれを優先する
+ENV_DEST="${BACKUP_DEST:-}"
+BACKUP_EXCLUDE_PATHS=()
+if [ -f "$CONF" ]; then
   # shellcheck disable=SC1090
   . "$CONF"
-  DEST="${BACKUP_DEST:-}"
 fi
+DEST="${ENV_DEST:-${BACKUP_DEST:-}}"
 
 if [ ! -d "$SRC" ]; then
   echo "エラー: バックアップ元ディレクトリ '$SRC' が存在しません。" >&2
@@ -57,6 +59,34 @@ EXCLUDES=(
   certs
 )
 
+# config/backup.conf の BACKUP_EXCLUDE_PATHS で指定した、決め打ちのパス（~/dev からの相対パス）を除外する。
+# 例: BACKUP_EXCLUDE_PATHS=( "some-project/videos" "other/secret.txt" )
+# ~/dev/ や $HOME/dev/ から書いてもよい（取り除いて扱う）。
+EXCLUDE_PATHS=()
+for p in ${BACKUP_EXCLUDE_PATHS[@]+"${BACKUP_EXCLUDE_PATHS[@]}"}; do
+  p="${p#"$HOME/dev/"}"
+  p="${p#\~/dev/}"
+  p="${p#/}"
+  p="${p%/}"
+  if [ -z "$p" ]; then
+    continue
+  fi
+  case "/$p/" in
+    */../*|*/./*)
+      echo "エラー: BACKUP_EXCLUDE_PATHS に '..' や '.' を含むパスは書けません: '$p'" >&2
+      exit 1 ;;
+  esac
+  if [ ! -e "$SRC/$p" ] && [ ! -L "$SRC/$p" ]; then
+    echo "注意: 除外指定のパス '~/dev/$p' は存在しません（書き間違いでないか確認してください）。"
+  fi
+  EXCLUDE_PATHS+=("$p")
+done
+if [ "${#EXCLUDE_PATHS[@]}" -gt 0 ]; then
+  echo "== 設定で除外するパス (config/backup.conf) =="
+  printf '  ~/dev/%s\n' ${EXCLUDE_PATHS[@]+"${EXCLUDE_PATHS[@]}"}
+  echo
+fi
+
 # ---- 1. 各 git リポジトリの未コミット / 未push を確認 -------------------
 echo "== git 状態チェック (未コミット or 未push があるものだけ表示) =="
 find "$SRC" -maxdepth 3 -type d -name .git -print0 2>/dev/null | sort -z | while IFS= read -r -d '' g; do
@@ -80,6 +110,21 @@ args=()
 for e in "${EXCLUDES[@]}"; do
   args+=(--exclude="$e")
 done
+# 決め打ちのパスは、rsync と tar で書き方が違う
+#   rsync: 先頭の / で「~/dev 直下からのパス」に固定する
+#   tar:   アーカイブ内の名前は dev/ から始まるので、dev/ を付ける。
+#          GNU tar の --exclude は既定で先頭に固定されない（別の場所の同名パスまで除外する）ため、
+#          --anchored で固定し、後ろの名前だけの除外（EXCLUDES）のために --no-anchored で戻す。
+#          macOS の tar（bsdtar）には --anchored が無いので、固定されないまま使う（docs/backup.md 参照）
+rsync_path_args=()
+tar_path_args=()
+for p in ${EXCLUDE_PATHS[@]+"${EXCLUDE_PATHS[@]}"}; do
+  rsync_path_args+=(--exclude="/$p")
+  tar_path_args+=(--exclude="dev/$p")
+done
+if [ "${#tar_path_args[@]}" -gt 0 ] && tar --version 2>/dev/null | grep -q 'GNU tar'; then
+  tar_path_args=(--anchored "${tar_path_args[@]}" --no-anchored)
+fi
 
 # 実行結果を logs/backup.log（git 管理外）に 1 行追記する。rsync / tar の実行時だけ。
 # 書式: 日時 モード 結果 所要秒数 保存先
@@ -102,7 +147,7 @@ if [ "$MODE" = "tar" ]; then
   out="$DEST/dev-$(date +%Y%m%d-%H%M).tar.gz"
   echo "== tar 作成: $out =="
   # 終了コード 1 は「読み込み中にファイルが変わった」等の警告なので続行
-  tar czf "$out" "${args[@]}" -C "$HOME" dev || {
+  tar czf "$out" ${tar_path_args[@]+"${tar_path_args[@]}"} "${args[@]}" -C "$HOME" dev || {
     rc=$?
     if [ "$rc" -eq 1 ]; then
       result="警告(tar rc=$rc)"
@@ -136,7 +181,7 @@ elif [ "$MODE" = "rsync" ]; then
   # 23 (一部転送失敗) と 24 (転送中にファイルが消えた) は警告扱いにして続行
   # --exclude=/.dev-backup は、目印ファイルを --delete で消されないようにするため
   rsync -a --delete --info=progress2 --no-perms --no-owner --no-group --modify-window=2 \
-        --exclude=/.dev-backup "${args[@]}" "$SRC/" "$target_dir/" || {
+        --exclude=/.dev-backup ${rsync_path_args[@]+"${rsync_path_args[@]}"} "${args[@]}" "$SRC/" "$target_dir/" || {
     rc=$?
     case "$rc" in
       23|24) result="警告(rsync rc=$rc)"
