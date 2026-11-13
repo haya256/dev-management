@@ -86,6 +86,22 @@ ln -s ~/dev/dev-management/scripts/backup-dev.sh ~/dev/backup-dev.sh
 
 既に同名のファイルがある場合は、先に退避してください。
 
+## macOS で使うとき
+
+スクリプトは WSL2（Ubuntu）で作ったものですが、macOS でも 3 モードとも動きます。ただし rsync モードには準備が要ります。
+
+- **Homebrew の rsync を入れる。** macOS 標準の rsync（openrsync）は `--info=progress2` に対応しておらず、rsync モードはコピーを始める前にエラーで止まります。`check` と `tar` は標準のままで動きます。
+
+  ```bash
+  brew install rsync
+  which rsync        # /opt/homebrew/bin/rsync と出れば、スクリプトからもこちらが使われる
+  ```
+
+- **cron や launchd で自動実行するときは PATH に注意する。** これらは `/opt/homebrew/bin` を PATH に含めないため、標準の rsync が使われて上と同じエラーになります。ターミナルから手で実行する分には問題ありません。
+- **保存先は `/Volumes/ドライブ名/...` で指定する。** ドライブをつないでいないときは「バックアップ先が存在しません」で止まり、本体側には何も作りません。
+- **`check` の件数の前に空白が入る。** 「未コミット:       1」のように表示されますが、macOS の `wc -l` の出力によるもので、判定は正しく動きます。
+- **macOS 12.3 以降が必要。** シンボリックリンク経由の実行で使う `readlink -f` が、それより前の macOS にはありません。
+
 ## 注意
 
 - rsync は `--delete` 付きです。`~/dev/` で消したファイルは、次回の実行でバックアップ先からも消えます。過去の状態を残したいときは tar を使ってください。
