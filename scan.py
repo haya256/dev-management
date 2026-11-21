@@ -29,6 +29,10 @@ PC_DATA_DIR = "pc-data"
 PROJECTS_SUBDIR = "projects"
 ENV_FILES = ("env.json", "env.md", "packages.txt")
 UNKNOWN = "取得できず"
+# このPC特有の設定（git 管理外）。HOST_NAME=... で環境名を決められる
+HOST_CONF = Path(__file__).resolve().parent / "config" / "host.conf"
+# Windows ネイティブの OS は、同じPCの WSL 側のスキャンで点検する
+WINDOWS_NATIVE_NOTE = "点検しない（OS は WSL 側のスキャンで点検）"
 
 
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
@@ -47,7 +51,23 @@ def sanitize_hostname(raw: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
 
 
+def configured_host_name() -> str:
+    """config/host.conf の HOST_NAME。無ければ空文字。
+
+    同じPCの WSL と Windows のように、ホスト名が同じ別環境を見分けるために使う。
+    """
+    try:
+        text = HOST_CONF.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    m = re.search(r"^\s*HOST_NAME\s*=\s*[\"']?([^\"'\r\n#]*?)[\"']?\s*(?:#.*)?$", text, re.M)
+    return m.group(1).strip() if m else ""
+
+
 def get_stable_hostname() -> str:
+    name = configured_host_name()
+    if name:
+        return name
     # macOS の socket.gethostname() はネットワーク（DHCP/mDNS）依存で変わるため、
     # ユーザー設定で固定される LocalHostName を優先する
     if sys.platform == "darwin":
@@ -58,6 +78,12 @@ def get_stable_hostname() -> str:
     return socket.gethostname()
 
 
+def write_text(path: Path, content: str):
+    # Windows でも改行を LF にそろえる（Path.write_text は CRLF に変換してしまう）
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(content)
+
+
 def ensure_data_git_repo(data_root: Path) -> bool:
     """data/ を git リポジトリとして初期化する。初回のみ True を返す。"""
     if (data_root / ".git").exists():
@@ -65,7 +91,7 @@ def ensure_data_git_repo(data_root: Path) -> bool:
     data_root.mkdir(exist_ok=True)
     subprocess.run(["git", "init"], cwd=data_root, check=True, capture_output=True)
     gitignore = data_root / ".gitignore"
-    gitignore.write_text("index.md\n", encoding="utf-8")
+    write_text(gitignore, "index.md\n")
     return True
 
 
@@ -411,6 +437,8 @@ def collect_macos() -> dict:
 
 
 def collect_packages() -> str:
+    if sys.platform == "win32":
+        return ""
     if sys.platform == "darwin":
         return run_cmd(["brew", "list", "--versions"], timeout=60) or ""
     return run_cmd(["dpkg-query", "-W", "-f=${Package} ${Version}\n"], timeout=60) or ""
@@ -426,6 +454,8 @@ def collect_env() -> dict:
             env["linux"] = collect_linux()
         if is_wsl():
             env["windows"] = collect_windows_from_wsl()
+    elif sys.platform == "win32":
+        env["windows_native"] = {"note": WINDOWS_NATIVE_NOTE}
     return env
 
 
@@ -449,12 +479,14 @@ def env_summary_rows(env: dict) -> list[tuple[str, str, str, str]]:
     if "macos" in env:
         x = env["macos"]
         rows.append(("macOS", x["os"], x["last_upgrade"], fmt_pending(x["pending"])))
+    if "windows_native" in env:
+        rows.append(("Windows (ネイティブ)", "-", "-", env["windows_native"]["note"]))
     return rows
 
 
 def write_env(env: dict, packages: str, pc_root: Path, hostname: str):
-    (pc_root / "env.json").write_text(json.dumps(env, indent=2, ensure_ascii=False), encoding="utf-8")
-    (pc_root / "packages.txt").write_text(packages, encoding="utf-8")
+    write_text(pc_root / "env.json", json.dumps(env, indent=2, ensure_ascii=False))
+    write_text(pc_root / "packages.txt", packages)
 
     lines = [f"# PC Environment — {hostname}", "",
              f"Checked: {env['checked_at'][:16].replace('T', ' ')}", "",
@@ -472,7 +504,7 @@ def write_env(env: dict, packages: str, pc_root: Path, hostname: str):
         lines += ["", "## macOS", "", "- 未適用の更新:"]
         lines += [f"  - {t}" for t in env["macos"]["pending_titles"]] or ["  - なし"]
     lines += ["", "パッケージの一覧: `packages.txt`", ""]
-    (pc_root / "env.md").write_text("\n".join(lines), encoding="utf-8")
+    write_text(pc_root / "env.md", "\n".join(lines))
 
 
 # ── 書き込み ──────────────────────────────────────────────────────────────────
@@ -483,7 +515,7 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
 
     if (project_path / "README.md").exists():
         shutil.copy2(project_path / "README.md", out_dir / "README.md")
-    (out_dir / "tree.txt").write_text(generate_tree(project_path), encoding="utf-8")
+    write_text(out_dir / "tree.txt", generate_tree(project_path))
 
     pmo_readme = project_path / "pmo" / "README.md"
     has_pmo = pmo_readme.exists()
@@ -492,7 +524,7 @@ def write_project_data(project_path: Path, key: str, pc_root: Path, dev_root: Pa
         pmo_out.mkdir(exist_ok=True)
         shutil.copy2(pmo_readme, pmo_out / "README.md")
 
-    rel = "~/" + str(project_path.relative_to(Path.home()))
+    rel = "~/" + project_path.relative_to(Path.home()).as_posix()
     description = project_description(project_path)
     return {"key": key, "path": rel, "has_pmo": has_pmo,
             "last_activity": get_last_activity(project_path),
@@ -507,15 +539,11 @@ def write_pc_meta(entries: list[dict], pc_root: Path, hostname: str, hostname_ra
         "project_count": len(entries),
         "scan_root": "~/dev",
     }
-    (pc_root / "meta.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    write_text(pc_root / "meta.json", json.dumps(meta, indent=2, ensure_ascii=False))
 
 
 def write_pc_entries(entries: list[dict], pc_root: Path):
-    (pc_root / "entries.json").write_text(
-        json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    write_text(pc_root / "entries.json", json.dumps(entries, indent=2, ensure_ascii=False))
 
 
 def write_pc_index(entries: list[dict], pc_root: Path, hostname: str):
@@ -532,7 +560,7 @@ def write_pc_index(entries: list[dict], pc_root: Path, hostname: str):
         f"|-------------|------|:----:|:-------:|-------------|\n"
         f"{rows}\n"
     )
-    (pc_root / "index.md").write_text(content, encoding="utf-8")
+    write_text(pc_root / "index.md", content)
 
 
 def discover_pc_data(data_root: Path) -> list[dict]:
@@ -639,7 +667,7 @@ def write_merged_index(data_root: Path) -> int:
         f"|------|{pc_col_sep}|:-------:|-------------|\n"
         f"{rows_str}\n"
     )
-    (data_root / "index.md").write_text(content, encoding="utf-8")
+    write_text(data_root / "index.md", content)
     return unique
 
 
@@ -651,10 +679,20 @@ def main():
                         help="スキャンをスキップして index.md だけ再生成する")
     parser.add_argument("--skip-env", action="store_true",
                         help="環境点検をスキップする（前回の点検結果は残す）")
+    parser.add_argument("--print-host", action="store_true",
+                        help="この環境の名前（data/pc-data/ の下のフォルダ名）を表示して終わる")
     args = parser.parse_args()
+
+    if sys.platform == "win32":
+        # Windows の Python は端末への出力を cp932 にするため、Git Bash では日本語が化ける
+        for stream in (sys.stdout, sys.stderr):
+            stream.reconfigure(encoding="utf-8")
 
     hostname_raw = get_stable_hostname()
     hostname = sanitize_hostname(hostname_raw)
+    if args.print_host:
+        print(hostname)
+        return
     dev_root = (Path.home() / "dev").resolve()
     self_path = Path(__file__).resolve().parent
     data_root = self_path / "data"
@@ -711,7 +749,10 @@ def main():
     print(f"  プロジェクトのスキャン: {time.monotonic() - scan_start:.1f} 秒", flush=True)
 
     if not args.skip_env:
-        print("環境を点検しています（Windows Update の確認に数十秒かかることがあります）...", flush=True)
+        if is_wsl():
+            print("環境を点検しています（Windows Update の確認に数十秒かかることがあります）...", flush=True)
+        else:
+            print("環境を点検しています...", flush=True)
         env = collect_env()
         with timed("パッケージ一覧"):
             packages = collect_packages()

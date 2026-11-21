@@ -10,7 +10,20 @@ if [ ! -d data/.git ]; then
     exit 1
 fi
 
-host="$(scutil --get LocalHostName 2>/dev/null || hostname)"
+# Windows（Git Bash）の python3 は Microsoft Store を開くだけの仮のコマンドのことがあるので、動く方を使う
+if python3 -c "" >/dev/null 2>&1; then
+    PY=python3
+elif python -c "" >/dev/null 2>&1; then
+    PY=python
+else
+    echo "Python が見つかりません（python3 / python）。" >&2
+    exit 1
+fi
+# Windows の Python でもファイルの読み書きを UTF-8 にする
+export PYTHONUTF8=1
+
+# 環境名（config/host.conf の HOST_NAME。無ければホスト名）。scan.py と同じ決め方にする
+host="$("$PY" scan.py --print-host)"
 
 # 各ステップの所要時間を記録し、最後にまとめて表示する
 # （macOS 標準の bash 3.2 でも動くよう、秒単位の SECONDS を使う）
@@ -30,7 +43,7 @@ end_step() {
 }
 
 step "スキャン"
-python3 scan.py "$@"
+"$PY" scan.py "$@"
 
 # pull --rebase は未コミットの変更があると失敗するため、先に commit する
 step "commit"
@@ -43,7 +56,7 @@ fi
 
 step "他PCの最新を取得"
 git -C data pull -q --rebase origin main
-python3 scan.py --merge-only
+"$PY" scan.py --merge-only
 
 step "push"
 if [ -n "$(git -C data log origin/main..HEAD --oneline)" ]; then

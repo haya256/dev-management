@@ -10,7 +10,7 @@
 python3 scan.py
 ```
 
-`~/dev/` 配下を走査し、`README.md` が存在するディレクトリを自動検出。結果を `data/pc-data/{ホスト名}/` に保存し、全 PC を統合した `data/index.md` を生成します。
+`~/dev/` 配下を走査し、`README.md` が存在するディレクトリを自動検出。結果を `data/pc-data/{環境名}/`（環境名はふつうホスト名。下の「同じ PC の別環境を分けて管理する」を参照）に保存し、全 PC を統合した `data/index.md` を生成します。
 
 ```bash
 python3 scan.py --merge-only
@@ -27,6 +27,7 @@ python3 scan.py --merge-only
 | Linux（Ubuntu など） | OS・カーネル、最後に apt で更新した日時、最後に `apt update` した日時、更新待ちの件数（うちセキュリティ更新） |
 | WSL の場合の Windows 側 | Windows のビルド番号、最後に入った更新プログラム、未適用の Windows Update（ドライバー・オプションの更新プログラム・Defender などの定義ファイルは除く）、WSL のバージョン |
 | macOS | OS のバージョン、最後に入ったソフトウェアアップデート、未適用のアップデート |
+| Windows ネイティブ（Git Bash） | 点検しない（同じ PC の WSL 側のスキャンで Windows を点検するため） |
 
 あわせて、入っているパッケージの一覧（`dpkg-query` / `brew list --versions`）を保存します。脆弱性が出たときに、別の PC からでも照合できるようにするためです。
 
@@ -46,7 +47,7 @@ data/
   .gitignore          # index.md を除外（push しない）
   index.md            # 全 PC 統合プロジェクト一覧・PC環境の一覧（ローカル生成のみ）
   pc-data/
-    {ホスト名}/
+    {環境名}/
       meta.json       # スキャン日時・プロジェクト数
       entries.json    # マージ用機械可読データ
       index.md        # この PC のみのプロジェクト一覧
@@ -105,6 +106,21 @@ cd ..
 
 スキャン → commit → 他 PC の最新を取得（`git pull --rebase`）→ `index.md` 再生成 → push を順に行います。変更がなければ commit と push は飛ばします。`./sync.sh --skip-env` のように、`scan.py` のオプションをそのまま渡せます。
 
+### 同じ PC の別環境を分けて管理する（WSL と Windows など）
+
+WSL の `~/dev/` と Windows の `C:\Users\{ユーザー名}\dev` のように、同じ PC に別の `dev` フォルダがあるときは、それぞれにこのリポジトリをクローンし、片方に環境名を付けます。ホスト名が同じままだと、両方が `data/pc-data/{環境名}/` に書き込んで上書きし合うためです。
+
+```bash
+# Windows 側（Git Bash）で
+mkdir -p config
+echo 'HOST_NAME=MyPC-Win' > config/host.conf   # 好きな名前でよい
+./sync.sh
+```
+
+`config/host.conf` は git 管理外です。`HOST_NAME` があればホスト名の代わりにその名前を使い、一覧には別の PC として並びます。`python3 scan.py --print-host` で、今の環境名を確認できます。
+
+Windows では `python3` が Microsoft Store を開くだけの仮のコマンドのことがあるため、`sync.sh` は動く方（`python3` / `python`）を選んで使います。
+
 ### プロジェクトを別 PC へ移動する
 
 [docs/move-project-mac-to-windows.md](docs/move-project-mac-to-windows.md) — Mac のプロジェクトを Windows 環境（WSL）へ移す手順
@@ -117,7 +133,7 @@ cd ..
 
 - `~/dev/` は読み取りのみ。変更・削除は一切行いません
 - PC環境の点検も読み取りのみ。パッケージの更新や設定変更は行いません
-- 実行のたびに自分の PC の `data/pc-data/{ホスト名}/` を全更新します（他 PC のデータは触りません）
+- 実行のたびに自分の PC の `data/pc-data/{環境名}/` を全更新します（他 PC のデータは触りません）
 - ネストしたプロジェクト（親子両方に `README.md` がある場合）は両方を収集します
 
 ## ライセンス

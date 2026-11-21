@@ -64,7 +64,7 @@ cd ..
 セットアップ完了後、ユーザーから質問があった場合は以下を読む:
 
 1. `data/index.md` — 全 PC 統合のプロジェクト一覧（PC 名・Main 判定・説明）
-2. `data/pc-data/{hostname}/index.md` — 特定 PC のみの一覧
+2. `data/pc-data/{hostname}/index.md` — 特定 PC のみの一覧（`{hostname}` は環境名。ふつうはホスト名だが、`config/host.conf` の `HOST_NAME` で別の名前にした環境もある）
 3. `data/pc-data/{hostname}/projects/{key}/README.md` — 個別プロジェクトの詳細
 4. `data/pc-data/{hostname}/projects/{key}/tree.txt` — ディレクトリ構成
 5. `data/pc-data/{hostname}/env.md` — その PC の OS の更新状況（`env.json` は機械で読む用）
@@ -72,6 +72,8 @@ cd ..
 
 `Description` 列は、`pmo/README.md` の「目的」の節を優先して取る（プロジェクトのコンセプトは pmo 側にある）。
 ルートの `README.md` はそのプロジェクトで作ったツール（手段）の説明なので、pmo に目的が書かれていないときだけ使う。
+
+同じ PC の WSL と Windows（C ドライブの `dev`）は、別の環境（別の列）として並ぶ。Windows ネイティブの環境は OS を点検しない（同じ PC の WSL 側で点検する）。
 
 `Main` 列が `YES` のプロジェクトは、そのPCに `pmo/` ディレクトリがある（＝メインの開発場所）。
 
@@ -120,7 +122,7 @@ python3 scan.py --merge-only  # スキャンなし、index.md だけ再生成（
 
 - `~/dev/` を Claude が直接参照することは禁止。`scan.py` 経由でのみアクセスする
 - `data/index.md` は push しない（`.gitignore` で除外済み）。各PCでローカル再生成する
-- `data/pc-data/{自分のホスト名}/` 以外は削除・変更しない
+- `data/pc-data/{自分の環境名}/` 以外は削除・変更しない（自分の環境名は `python3 scan.py --print-host` で分かる）
 
 ---
 
