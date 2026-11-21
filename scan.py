@@ -91,7 +91,7 @@ def ensure_data_git_repo(data_root: Path) -> bool:
     data_root.mkdir(exist_ok=True)
     subprocess.run(["git", "init"], cwd=data_root, check=True, capture_output=True)
     gitignore = data_root / ".gitignore"
-    write_text(gitignore, "index.md\n")
+    write_text(gitignore, "/index.md\n")
     return True
 
 
